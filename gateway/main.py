@@ -20,12 +20,15 @@ from model import ForecastingPipeline, calculate_comfort_score
 # load environment variables from .env
 load_dotenv()
 
-MQTT_HOST = os.getenv("MQTT_HOST", "5fa7547d2ce44efa9e3df088b9b00cf4.s1.eu.hivemq.cloud")
+MQTT_HOST = os.getenv("MQTT_HOST")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))
-MQTT_USER = os.getenv("MQTT_USER", "JayMahesa")
-MQTT_PASS = os.getenv("MQTT_PASS", "JayMahesa1")
+MQTT_USER = os.getenv("MQTT_USER")
+MQTT_PASS = os.getenv("MQTT_PASS")
 MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "gateway_bot")
 MQTT_TELEMETRY_TOPIC = os.getenv("MQTT_TELEMETRY_TOPIC", "iot/classA/group01/telemetry")
+
+if not MQTT_HOST or not MQTT_USER or not MQTT_PASS:
+    raise ValueError("Missing required MQTT configurations (MQTT_HOST, MQTT_USER, or MQTT_PASS) in .env file.")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 

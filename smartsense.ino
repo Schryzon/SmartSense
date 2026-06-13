@@ -26,7 +26,7 @@
 #define DHT_PIN 14
 #define DHT_TYPE DHT11
 
-#define PIR_PIN 27
+#define PIR_PIN 5
 
 #define LED_GREEN 2
 #define LED_RED 4

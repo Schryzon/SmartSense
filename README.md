@@ -8,14 +8,24 @@ The gateway utilizes a **PyTorch LSTM model** running on CUDA to predict upcomin
 
 ## System Architecture
 
-```
-[ ESP32 Sensor Node ] 
-      │ (DHT11 Temp/Hum, PIR Motion)
-      ▼
-[ HiveMQ Cloud Broker (MQTT over TLS) ]
-      │ 
-      ▼
-[ Python Gateway (PyTorch LSTM + CUDA on GPU) ] <───> [ Telegram Bot API ] <───> [ User ]
+```mermaid
+graph TD
+    ESP["ESP32 Sensor Node<br>(DHT11 Temp/Hum, PIR Motion)"]
+    HiveMQ["HiveMQ Cloud Broker<br>(MQTT over TLS)"]
+    Gateway["Python Gateway<br>(PyTorch LSTM + CUDA on GPU)"]
+    Telegram["Telegram Bot API"]
+    User["User"]
+
+    ESP -->|Telemetry| HiveMQ
+    HiveMQ -->|Telemetry| Gateway
+    Gateway <-->|Poll / Commands| Telegram
+    Telegram <-->|Chat / Alerts| User
+
+    style ESP fill:#1b4d3e,stroke:#39ff14,stroke-width:2px,color:#fff
+    style HiveMQ fill:#0f3b4d,stroke:#00f0ff,stroke-width:2px,color:#fff
+    style Gateway fill:#3c0f4d,stroke:#bd00ff,stroke-width:2px,color:#fff
+    style Telegram fill:#4d0f0f,stroke:#ff3131,stroke-width:2px,color:#fff
+    style User fill:#2a2d34,stroke:#ffffff,stroke-width:2px,color:#fff
 ```
 
 ---

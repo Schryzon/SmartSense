@@ -1,4 +1,5 @@
 import os
+import threading
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,9 +11,9 @@ from sklearn.preprocessing import MinMaxScaler
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Comfort forecasting will run on: {device}")
 
-# comfort score computation based on deviations from ideal comfort (22°C, 50% RH)
+# comfort score computation based on deviations from ideal comfort (28°C, 50% RH)
 def calculate_comfort_score(temp: float, hum: float) -> float:
-    temp_penalty = abs(temp - 22.0) * 1.2
+    temp_penalty = abs(temp - 28.0) * 1.2
     hum_penalty = abs(hum - 50.0) * 0.08
     score = 10.0 - (temp_penalty + hum_penalty)
     return max(0.0, min(10.0, score))
@@ -44,6 +45,7 @@ class ForecastingPipeline:
         self.scaler = MinMaxScaler()
         self.is_trained = False
         self.model_path = os.path.join(os.path.dirname(__file__), "model.pt")
+        self.lock = threading.Lock()
 
         # try loading pre-trained weights if they exist
         if os.path.exists(self.model_path):
@@ -83,18 +85,19 @@ class ForecastingPipeline:
         criterion = nn.MSELoss()
         optimizer = optim.Adam(self.model.parameters(), lr=lr)
 
-        self.model.train()
-        for epoch in range(epochs):
-            optimizer.zero_grad()
-            outputs = self.model(x)
-            loss = criterion(outputs, y)
-            loss.backward()
-            optimizer.step()
+        with self.lock:
+            self.model.train()
+            for epoch in range(epochs):
+                optimizer.zero_grad()
+                outputs = self.model(x)
+                loss = criterion(outputs, y)
+                loss.backward()
+                optimizer.step()
 
-        # save weights
-        torch.save(self.model.state_dict(), self.model_path)
-        self.is_trained = True
-        print(f"training completed. Loss: {loss.item():.6f}")
+            # save weights
+            torch.save(self.model.state_dict(), self.model_path)
+            self.is_trained = True
+            print(f"training completed. Loss: {loss.item():.6f}")
         return True
 
     def predict_next(self, recent_data: list) -> tuple:
@@ -117,9 +120,10 @@ class ForecastingPipeline:
         # format input tensor
         input_tensor = torch.tensor(scaled_slice, dtype=torch.float32).unsqueeze(0).to(device)
 
-        self.model.eval()
-        with torch.no_grad():
-            prediction_scaled = self.model(input_tensor).cpu().numpy()[0]
+        with self.lock:
+            self.model.eval()
+            with torch.no_grad():
+                prediction_scaled = self.model(input_tensor).cpu().numpy()[0]
 
         # inverse scale the prediction (dummy fill for 'occupied' feature since transform expects 3 features)
         dummy_row = np.zeros(3)
