@@ -1,0 +1,8 @@
+python-dotenv
+paho-mqtt
+python-telegram-bot
+numpy
+pandas
+scikit-learn
+fastapi
+uvicorn

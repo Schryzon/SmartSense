@@ -1,0 +1,20 @@
+# Ignore sensitive credentials
+.env
+
+# Ignore PyTorch model weights and state dicts
+*.pt
+*.pth
+
+# Ignore local database/CSV telemetry data
+*.csv
+*.json
+*.db
+!requirements.txt
+
+# Python virtual env and cache
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/

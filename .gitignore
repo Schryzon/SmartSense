@@ -1,0 +1,19 @@
+# Arduino compile/build artifacts
+build/
+bin/
+*.hex
+*.elf
+*.bin
+
+# Local Arduino configuration and secrets
+secrets.h
+
+# VS Code / IDE settings
+.vscode/
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/extensions.json
+.clangd/
+.clang-format
+.clang-tidy

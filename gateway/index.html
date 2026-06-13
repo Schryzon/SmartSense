@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartSense Premium Dashboard</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #0b0c10;
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #ffffff;
+            --text-secondary: #8b9bb4;
+            --accent-blue: #00f0ff;
+            --accent-purple: #bd00ff;
+            --accent-green: #39ff14;
+            --accent-red: #ff3131;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(189, 0, 255, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(0, 240, 255, 0.08) 0%, transparent 40%);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+            border-bottom: 1px solid var(--card-border);
+            padding-bottom: 1.5rem;
+        }
+
+        .logo-section h1 {
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo-section p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-top: 0.2rem;
+        }
+
+        .system-status {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--card-border);
+            padding: 0.5rem 1rem;
+            border-radius: 50px;
+            font-size: 0.85rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent-green);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.9); opacity: 0.6; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+
+        /* Responsive Grid layout */
+        .grid-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-radius: 20px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, transparent 100%);
+            pointer-events: none;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .card-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-secondary);
+            margin-bottom: 0.8rem;
+        }
+
+        .card-value {
+            font-size: 2.8rem;
+            font-weight: 800;
+            display: flex;
+            align-items: baseline;
+            gap: 0.2rem;
+        }
+
+        .card-value span.unit {
+            font-size: 1.2rem;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .card-footer {
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* Specific card styles */
+        .card.hot {
+            border-color: rgba(255, 49, 49, 0.2);
+            background: linear-gradient(185deg, rgba(255, 49, 49, 0.02) 0%, rgba(255, 255, 255, 0.03) 100%);
+        }
+
+        .card.hot .card-value {
+            color: var(--accent-red);
+            text-shadow: 0 0 20px rgba(255, 49, 49, 0.25);
+        }
+
+        .card.occupied {
+            border-color: rgba(57, 255, 20, 0.2);
+        }
+
+        .pulse-occupied {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 800;
+            background: rgba(57, 255, 20, 0.1);
+            color: var(--accent-green);
+            border: 1px solid rgba(57, 255, 20, 0.2);
+        }
+
+        .pulse-vacant {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 800;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            border: 1px solid var(--card-border);
+        }
+
+        /* Comfort badge mappings */
+        .comfort-high {
+            color: var(--accent-green);
+        }
+        .comfort-mid {
+            color: #ffcc00;
+        }
+        .comfort-low {
+            color: var(--accent-red);
+        }
+
+        /* Chart card styling */
+        .chart-section {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        @media (max-width: 900px) {
+            .chart-section {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .chart-container {
+            min-height: 350px;
+        }
+
+        .control-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+            justify-content: center;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%);
+            border: none;
+            color: #000;
+            padding: 1rem;
+            font-weight: 800;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: inherit;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            box-shadow: 0 4px 15px rgba(0, 240, 255, 0.2);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(189, 0, 255, 0.4);
+            color: #fff;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Log window */
+        .log-window {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 1rem;
+            height: 160px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .log-entry {
+            margin-bottom: 0.4rem;
+            line-height: 1.3;
+        }
+
+        .log-time {
+            color: var(--accent-blue);
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div class="logo-section">
+            <h1>SmartSense</h1>
+            <p>Unified GPU Telemetry & Comfort Predictions Engine</p>
+        </div>
+        <div class="system-status">
+            <div class="status-dot"></div>
+            <span>Gateway Online</span>
+        </div>
+    </header>
+
+    <!-- Metrics Row -->
+    <div class="grid-metrics">
+        <!-- Temperature Card -->
+        <div class="card" id="temp-card">
+            <div class="card-title">Temperature</div>
+            <div class="card-value">
+                <span id="val-temp">--.-</span><span class="unit">°C</span>
+            </div>
+            <div class="card-footer">
+                <span id="temp-status">Reading sensors...</span>
+                <span>DHT11</span>
+            </div>
+        </div>
+
+        <!-- Humidity Card -->
+        <div class="card">
+            <div class="card-title">Humidity</div>
+            <div class="card-value">
+                <span id="val-hum">--</span><span class="unit">%</span>
+            </div>
+            <div class="card-footer">
+                <span>Relative Humidity</span>
+                <span>DHT11</span>
+            </div>
+        </div>
+
+        <!-- Comfort Score Card -->
+        <div class="card">
+            <div class="card-title">Comfort Score</div>
+            <div class="card-value">
+                <span id="val-comfort">-.--</span><span class="unit">/10</span>
+            </div>
+            <div class="card-footer">
+                <span id="comfort-status">Standard scale</span>
+                <span class="comfort-high" id="comfort-label">--</span>
+            </div>
+        </div>
+
+        <!-- Occupancy Card -->
+        <div class="card" id="occupancy-card">
+            <div class="card-title">Occupancy</div>
+            <div style="margin: 0.8rem 0;">
+                <span class="pulse-vacant" id="val-occupied">UNKNOWN</span>
+            </div>
+            <div class="card-footer" style="margin-top: 1.7rem;">
+                <span id="val-room">Room: --</span>
+                <span>PIR Sensor</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts and controls -->
+    <div class="chart-section">
+        <div class="card">
+            <div class="card-title">Comfort & Climate Trends (With PyTorch GPU Predictions)</div>
+            <div class="chart-container">
+                <canvas id="telemetryChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card control-panel">
+            <div class="card-title">GPU Forecaster Engine</div>
+            <button class="btn" id="btn-train" onclick="triggerTraining()">
+                ⚡ Retrain PyTorch on GPU
+            </button>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); text-align: center;">
+                LSTM Model state: <strong id="model-status" style="color: var(--accent-blue);">Loading...</strong>
+            </div>
+            <div class="card-title" style="margin-top: 0.5rem; margin-bottom: 0;">Event Log</div>
+            <div class="log-window" id="log-container">
+                <div class="log-entry"><span class="log-time">[System]</span>Dashboard initialized.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let telemetryChart = null;
+
+    function addLog(message) {
+        const container = document.getElementById("log-container");
+        const timeStr = new Date().toLocaleTimeString();
+        const entry = document.createElement("div");
+        entry.className = "log-entry";
+        entry.innerHTML = `<span class="log-time">[${timeStr}]</span> ${message}`;
+        container.appendChild(entry);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    async function fetchCurrent() {
+        try {
+            const res = await fetch("/api/current");
+            if (!res.ok) return;
+            const data = await res.json();
+
+            if (!data.temperature) return;
+
+            document.getElementById("val-temp").innerText = data.temperature.toFixed(1);
+            document.getElementById("val-hum").innerText = Math.round(data.humidity);
+            document.getElementById("val-comfort").innerText = data.comfort_score.toFixed(2);
+            document.getElementById("val-room").innerText = `Room: ${data.room}`;
+
+            // alert hot styling
+            const tempCard = document.getElementById("temp-card");
+            if (data.temperature >= 29.0) {
+                tempCard.className = "card hot";
+                document.getElementById("temp-status").innerText = "HOT WARNING! ⚠️";
+            } else {
+                tempCard.className = "card";
+                document.getElementById("temp-status").innerText = "Normal Range";
+            }
+
+            // occupancy badge
+            const occupiedSpan = document.getElementById("val-occupied");
+            if (data.occupied) {
+                occupiedSpan.className = "pulse-occupied";
+                occupiedSpan.innerText = "OCCUPIED";
+            } else {
+                occupiedSpan.className = "pulse-vacant";
+                occupiedSpan.innerText = "VACANT";
+            }
+
+            // comfort badge
+            const comfortLabel = document.getElementById("comfort-label");
+            const comfortVal = data.comfort_score;
+            if (comfortVal >= 9.0) {
+                comfortLabel.innerText = "Optimal";
+                comfortLabel.className = "comfort-high";
+            } else if (comfortVal >= 7.0) {
+                comfortLabel.innerText = "Good";
+                comfortLabel.className = "comfort-high";
+            } else if (comfortVal >= 5.0) {
+                comfortLabel.innerText = "Moderate";
+                comfortLabel.className = "comfort-mid";
+            } else {
+                comfortLabel.innerText = "Uncomfortable";
+                comfortLabel.className = "comfort-low";
+            }
+        } catch (err) {
+            console.error("error fetching current telemetry", err);
+        }
+    }
+
+    async function fetchHistoryAndDraw() {
+        try {
+            // fetch last 30 history points
+            const resHistory = await fetch("/api/history");
+            const resForecast = await fetch("/api/forecast");
+            
+            if (!resHistory.ok) return;
+            const history = await resHistory.json();
+            
+            let forecast = null;
+            if (resForecast.ok) {
+                forecast = await resForecast.json();
+                document.getElementById("model-status").innerText = forecast.model_trained ? "CUDA Trained ✅" : "Gathering Data ⏳";
+            }
+
+            // prepare datasets
+            const labels = [];
+            const tempData = [];
+            const humData = [];
+            const comfortData = [];
+
+            history.reverse().forEach((item, index) => {
+                const date = new Date(item.timestamp);
+                labels.push(date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+                tempData.push(item.temperature);
+                humData.push(item.humidity);
+                comfortData.push(item.comfort_score);
+            });
+
+            // handle forecasted predictions
+            if (forecast && forecast.predicted_temperature && forecast.model_trained) {
+                const nextTime = new Date();
+                nextTime.setSeconds(nextTime.getSeconds() + 5);
+                labels.push(nextTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " (Pred)");
+                
+                // predict data is pushed to end
+                tempData.push(forecast.predicted_temperature);
+                humData.push(forecast.predicted_humidity);
+                comfortData.push(forecast.predicted_comfort_score);
+            }
+
+            // draw or update Chart.js
+            if (telemetryChart) {
+                telemetryChart.data.labels = labels;
+                telemetryChart.data.datasets[0].data = tempData;
+                telemetryChart.data.datasets[1].data = humData;
+                telemetryChart.data.datasets[2].data = comfortData;
+                telemetryChart.update('none'); // silent update
+            } else {
+                const ctx = document.getElementById("telemetryChart").getContext("2d");
+                
+                const tempGrad = ctx.createLinearGradient(0, 0, 0, 300);
+                tempGrad.addColorStop(0, 'rgba(255, 49, 49, 0.3)');
+                tempGrad.addColorStop(1, 'rgba(255, 49, 49, 0.0)');
+
+                const humGrad = ctx.createLinearGradient(0, 0, 0, 300);
+                humGrad.addColorStop(0, 'rgba(0, 240, 255, 0.3)');
+                humGrad.addColorStop(1, 'rgba(0, 240, 255, 0.0)');
+
+                const comfortGrad = ctx.createLinearGradient(0, 0, 0, 300);
+                comfortGrad.addColorStop(0, 'rgba(189, 0, 255, 0.3)');
+                comfortGrad.addColorStop(1, 'rgba(189, 0, 255, 0.0)');
+
+                telemetryChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Temperature (°C)',
+                                data: tempData,
+                                borderColor: '#ff3131',
+                                backgroundColor: tempGrad,
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: (context) => context.dataIndex === context.dataset.data.length - 1 && forecast && forecast.model_trained ? 8 : 3,
+                                pointBackgroundColor: '#ff3131'
+                            },
+                            {
+                                label: 'Humidity (%)',
+                                data: humData,
+                                borderColor: '#00f0ff',
+                                backgroundColor: humGrad,
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: (context) => context.dataIndex === context.dataset.data.length - 1 && forecast && forecast.model_trained ? 8 : 3,
+                                pointBackgroundColor: '#00f0ff'
+                            },
+                            {
+                                label: 'Comfort Score',
+                                data: comfortData,
+                                borderColor: '#bd00ff',
+                                backgroundColor: comfortGrad,
+                                fill: true,
+                                tension: 0.3,
+                                pointRadius: (context) => context.dataIndex === context.dataset.data.length - 1 && forecast && forecast.model_trained ? 8 : 3,
+                                pointBackgroundColor: '#bd00ff'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                labels: {
+                                    color: '#8b9bb4',
+                                    font: { family: 'Outfit' }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                ticks: { color: '#8b9bb4', font: { family: 'Outfit' } }
+                            },
+                            y: {
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                ticks: { color: '#8b9bb4', font: { family: 'Outfit' } }
+                            }
+                        }
+                    }
+                });
+            }
+        } catch (err) {
+            console.error("error loading historical chart data", err);
+        }
+    }
+
+    async function triggerTraining() {
+        const btn = document.getElementById("btn-train");
+        btn.disabled = true;
+        btn.innerText = "⏳ Training PyTorch on GPU...";
+        addLog("Manually triggered PyTorch CUDA retraining loop.");
+        
+        try {
+            const res = await fetch("/api/train", { method: "POST" });
+            const data = await res.json();
+            if (data.status === "success") {
+                addLog("PyTorch model trained successfully on NVIDIA GPU!");
+            } else {
+                addLog("Model training skipped: " + data.message);
+            }
+        } catch (err) {
+            addLog("Training request failed: " + err);
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "⚡ Retrain PyTorch on GPU";
+            fetchHistoryAndDraw();
+        }
+    }
+
+    // Polling intervals
+    setInterval(fetchCurrent, 2500);
+    setInterval(fetchHistoryAndDraw, 5000);
+
+    // Initial triggers
+    fetchCurrent();
+    fetchHistoryAndDraw();
+    addLog("System fully operational. Subscribed to HiveMQ.");
+</script>
+</body>
+</html>
