@@ -10,6 +10,40 @@
 #include <time.h>
 #include "secrets.h"
 
+class KalmanFilter {
+private:
+    float q; // Process noise covariance
+    float r; // Measurement noise covariance
+    float x; // Estimated value
+    float p; // Estimation error covariance
+    float k; // Kalman gain
+
+public:
+    KalmanFilter(float process_noise, float sensor_noise, float estimated_error, float initial_value) {
+        q = process_noise;
+        r = sensor_noise;
+        p = estimated_error;
+        x = initial_value;
+    }
+
+    float update(float measurement) {
+        k = p / (p + r);
+        x = x + k * (measurement - x);
+        p = (1.0f - k) * p + q;
+        return x;
+    }
+};
+
+struct TelemetryData {
+    float temperature;
+    float humidity;
+    bool occupied;
+};
+
+QueueHandle_t telemetry_queue = NULL;
+TaskHandle_t NetworkTaskHandle = NULL;
+TaskHandle_t SensorTaskHandle = NULL;
+
 /*
  * SmartSense
  *
@@ -94,6 +128,10 @@ void update_display(
     bool occupied
 );
 
+void sensor_task_fn(void* pvParameters);
+void network_task_fn(void* pvParameters);
+void publish_telemetry_data(TelemetryData data);
+
 void setup() {
     Serial.begin(115200);
 
@@ -169,38 +207,35 @@ void setup() {
         mqtt_callback
     );
 
-    connect_mqtt();
+    // Create queue to hold telemetry packets (up to 5)
+    telemetry_queue = xQueueCreate(5, sizeof(TelemetryData));
 
-    delay(2000);
+    // Spawn network task on Core 0 (handles Wi-Fi, MQTT loop, keepalive)
+    xTaskCreatePinnedToCore(
+        network_task_fn,
+        "NetworkTask",
+        8192,
+        NULL,
+        1,
+        &NetworkTaskHandle,
+        0
+    );
+
+    // Spawn sensor task on Core 1 (handles DHT, PIR, OLED, LEDs, Kalman Filter)
+    xTaskCreatePinnedToCore(
+        sensor_task_fn,
+        "SensorTask",
+        4096,
+        NULL,
+        1,
+        &SensorTaskHandle,
+        1
+    );
 }
 
 void loop() {
-    if(
-        WiFi.status() != WL_CONNECTED
-    ) {
-        connect_wifi();
-    }
-
-    if(
-        !mqtt_client.connected()
-    ) {
-        connect_mqtt();
-    }
-
-    mqtt_client.loop();
-
-    unsigned long now_ms =
-        millis();
-
-    if(
-        now_ms - last_publish_ms >=
-        PUBLISH_INTERVAL_MS
-    ) {
-        last_publish_ms =
-            now_ms;
-
-        publish_telemetry();
-    }
+    // Arduino loop task sleeps to yield Core 1 execution time
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
 void connect_wifi() {
@@ -281,11 +316,24 @@ void connect_mqtt() {
             "MQTT..."
         );
 
+        char will_msg[128];
+        snprintf(
+            will_msg,
+            sizeof(will_msg),
+            "{\"device_id\":\"%s\",\"status\":\"offline\"}",
+            DEVICE_ID
+        );
+
+        // Connect with Last Will and Testament Will parameters
         if(
             mqtt_client.connect(
                 client_id.c_str(),
                 MQTT_USER,
-                MQTT_PASS
+                MQTT_PASS,
+                TOPIC_TELEMETRY,
+                1,
+                true,
+                will_msg
             )
         ) {
             Serial.println(
@@ -305,7 +353,8 @@ void connect_mqtt() {
                 mqtt_client.state()
             );
 
-            delay(2000);
+            // yield Core 0 while waiting
+            vTaskDelay(pdMS_TO_TICKS(2000));
         }
     }
 }
@@ -395,86 +444,16 @@ void update_display(
     display.display();
 }
 
-void publish_telemetry() {
-    float temp =
-        dht.readTemperature();
+void publish_telemetry_data(TelemetryData data) {
+    int wifi_rssi = WiFi.RSSI();
+    unsigned long uptime_s = millis() / 1000UL;
+    time_t now_ts = time(nullptr);
 
-    float hum =
-        dht.readHumidity();
-
-    if(
-        !isnan(temp) &&
-        !isnan(hum)
-    ) {
-        last_temp = temp;
-        last_hum = hum;
-    }
-
-    if(
-        isnan(last_temp) ||
-        isnan(last_hum)
-    ) {
-        Serial.println(
-            "DHT failed"
-        );
-
-        return;
-    }
-
-    bool occupied =
-        digitalRead(
-            PIR_PIN
-        );
-
-    digitalWrite(
-        LED_GREEN,
-        occupied
-    );
-
-    if(
-        last_temp >=
-        TEMP_ALERT_THRESHOLD
-    ) {
-        red_led_state =
-            !red_led_state;
-
-        digitalWrite(
-            LED_RED,
-            red_led_state
-        );
-    }
-    else {
-        digitalWrite(
-            LED_RED,
-            LOW
-        );
-    }
-
-    update_display(
-        last_temp,
-        last_hum,
-        occupied
-    );
-
-    int wifi_rssi =
-        WiFi.RSSI();
-
-    unsigned long uptime_s =
-        millis() / 1000UL;
-
-    time_t now_ts =
-        time(nullptr);
-
-    if(
-        now_ts <
-        1700000000
-    ) {
-        now_ts =
-            uptime_s;
+    if (now_ts < 1700000000) {
+        now_ts = uptime_s;
     }
 
     char payload[512];
-
     snprintf(
         payload,
         sizeof(payload),
@@ -491,34 +470,89 @@ void publish_telemetry() {
         "}",
         DEVICE_ID,
         ROOM_NAME,
-        last_temp,
-        last_hum,
-        occupied,
+        data.temperature,
+        data.humidity,
+        data.occupied ? 1 : 0,
         wifi_rssi,
         uptime_s,
-        (
-            last_temp >=
-            TEMP_ALERT_THRESHOLD
-        )
-        ? "true"
-        : "false",
-        (unsigned long)
-        now_ts
+        (data.temperature >= TEMP_ALERT_THRESHOLD) ? "true" : "false",
+        (unsigned long)now_ts
     );
 
-    Serial.println(
-        payload
-    );
+    Serial.println(payload);
+    bool ok = mqtt_client.publish(TOPIC_TELEMETRY, payload);
+    Serial.println(ok ? "Publish OK" : "Publish FAILED");
+}
 
-    bool ok =
-        mqtt_client.publish(
-            TOPIC_TELEMETRY,
-            payload
-        );
+void sensor_task_fn(void* pvParameters) {
+    // Local filter instances with appropriate noise parameters
+    // Process noise q for temp is low (slow change); sensor noise r for DHT11 is high (jittery)
+    KalmanFilter temp_filter(0.005f, 1.0f, 1.0f, 25.0f);
+    KalmanFilter hum_filter(0.05f, 4.0f, 4.0f, 50.0f);
 
-    Serial.println(
-        ok
-        ? "Publish OK"
-        : "Publish FAILED"
-    );
+    while (true) {
+        float raw_temp = dht.readTemperature();
+        float raw_hum = dht.readHumidity();
+
+        if (!isnan(raw_temp) && !isnan(raw_hum)) {
+            last_temp = temp_filter.update(raw_temp);
+            last_hum = hum_filter.update(raw_hum);
+        } else {
+            Serial.println("DHT failed to read");
+        }
+
+        bool occupied = digitalRead(PIR_PIN);
+
+        // Green LED tracks occupancy
+        digitalWrite(LED_GREEN, occupied);
+
+        // Red LED alert on high temperature (toggle alert state)
+        if (!isnan(last_temp)) {
+            if (last_temp >= TEMP_ALERT_THRESHOLD) {
+                red_led_state = !red_led_state;
+                digitalWrite(LED_RED, red_led_state);
+            } else {
+                digitalWrite(LED_RED, LOW);
+            }
+        }
+
+        // Render to SSD1306 display
+        if (!isnan(last_temp) && !isnan(last_hum)) {
+            update_display(last_temp, last_hum, occupied);
+        }
+
+        // Push formatted data to the network queue
+        if (!isnan(last_temp) && !isnan(last_hum)) {
+            TelemetryData data;
+            data.temperature = last_temp;
+            data.humidity = last_hum;
+            data.occupied = occupied;
+            xQueueSend(telemetry_queue, &data, 0); // non-blocking push
+        }
+
+        // poll sensors at 2-second intervals
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
+void network_task_fn(void* pvParameters) {
+    while (true) {
+        if (WiFi.status() != WL_CONNECTED) {
+            connect_wifi();
+        }
+
+        if (!mqtt_client.connected()) {
+            connect_mqtt();
+        }
+
+        mqtt_client.loop();
+
+        TelemetryData data;
+        // Wait up to 5 seconds for incoming telemetry packets from queue
+        if (xQueueReceive(telemetry_queue, &data, pdMS_TO_TICKS(5000)) == pdPASS) {
+            publish_telemetry_data(data);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }

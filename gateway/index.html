@@ -373,8 +373,12 @@
             <button class="btn" id="btn-train" onclick="triggerTraining()">
                 ⚡ Retrain PyTorch on GPU
             </button>
-            <div style="font-size: 0.85rem; color: var(--text-secondary); text-align: center;">
-                LSTM Model state: <strong id="model-status" style="color: var(--accent-blue);">Loading...</strong>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; display: flex; flex-direction: column; gap: 0.3rem;">
+                <div>LSTM Model state: <strong id="model-status" style="color: var(--accent-blue);">Loading...</strong></div>
+                <div>AE Reconstruction Loss: <strong id="recon-loss" style="color: var(--text-secondary);">--.----</strong></div>
+            </div>
+            <div id="anomaly-alert-banner" style="display: none; font-size: 0.85rem; font-weight: 800; color: var(--accent-red); text-align: center; padding: 0.4rem; border: 1px solid var(--accent-red); border-radius: 8px; background: rgba(255, 49, 49, 0.1); animation: pulse 1.5s infinite;">
+                ⚠️ ANOMALOUS TELEMETRY DETECTED!
             </div>
             <div class="card-title" style="margin-top: 0.5rem; margin-bottom: 0;">Event Log</div>
             <div class="log-window" id="log-container">
@@ -386,6 +390,7 @@
 
 <script>
     let telemetryChart = null;
+    let ws = null;
 
     function addLog(message) {
         const container = document.getElementById("log-container");
@@ -397,55 +402,117 @@
         container.scrollTop = container.scrollHeight;
     }
 
+    function calculateComfortScoreLocal(temp, hum) {
+        const tempPenalty = Math.abs(temp - 28.0) * 1.2;
+        const humPenalty = Math.abs(hum - 50.0) * 0.08;
+        const score = 10.0 - (tempPenalty + humPenalty);
+        return Math.max(0.0, Math.min(10.0, score));
+    }
+
+    function connectWebSocket() {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
+        
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            addLog("WebSocket client connected to gateway.");
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload.type === "telemetry") {
+                    updateCurrentMetrics(payload.data);
+                }
+            } catch (err) {
+                console.error("error parsing websocket frame", err);
+            }
+        };
+
+        ws.onclose = () => {
+            addLog("WebSocket connection closed. Reconnecting in 3s...");
+            setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = (err) => {
+            console.error("websocket connection error", err);
+        };
+    }
+
+    function updateCurrentMetrics(data) {
+        if (!data.temperature) return;
+
+        document.getElementById("val-temp").innerText = data.temperature.toFixed(1);
+        document.getElementById("val-hum").innerText = Math.round(data.humidity);
+        document.getElementById("val-comfort").innerText = data.comfort_score.toFixed(2);
+        document.getElementById("val-room").innerText = `Room: ${data.room}`;
+
+        // reconstruction loss and anomaly UI elements
+        const lossVal = data.reconstruction_loss !== undefined ? data.reconstruction_loss.toFixed(6) : "--.----";
+        document.getElementById("recon-loss").innerText = lossVal;
+        
+        const banner = document.getElementById("anomaly-alert-banner");
+        const comfortCard = document.getElementById("val-comfort").closest(".card");
+        if (data.is_anomaly) {
+            banner.style.display = "block";
+            comfortCard.style.borderColor = "var(--accent-red)";
+            comfortCard.style.background = "rgba(255, 49, 49, 0.05)";
+            if (banner.dataset.flagged !== "true") {
+                banner.dataset.flagged = "true";
+                addLog(`⚠️ Anomaly detected! Rec Loss: ${lossVal}`);
+            }
+        } else {
+            banner.style.display = "none";
+            comfortCard.style.borderColor = "var(--card-border)";
+            comfortCard.style.background = "var(--card-bg)";
+            banner.dataset.flagged = "false";
+        }
+
+        // alert hot styling
+        const tempCard = document.getElementById("temp-card");
+        if (data.temperature >= 29.0) {
+            tempCard.className = "card hot";
+            document.getElementById("temp-status").innerText = "HOT WARNING! ⚠️";
+        } else {
+            tempCard.className = "card";
+            document.getElementById("temp-status").innerText = "Normal Range";
+        }
+
+        // occupancy badge
+        const occupiedSpan = document.getElementById("val-occupied");
+        if (data.occupied) {
+            occupiedSpan.className = "pulse-occupied";
+            occupiedSpan.innerText = "OCCUPIED";
+        } else {
+            occupiedSpan.className = "pulse-vacant";
+            occupiedSpan.innerText = "VACANT";
+        }
+
+        // comfort badge
+        const comfortLabel = document.getElementById("comfort-label");
+        const comfortVal = data.comfort_score;
+        if (comfortVal >= 9.0) {
+            comfortLabel.innerText = "Optimal";
+            comfortLabel.className = "comfort-high";
+        } else if (comfortVal >= 7.0) {
+            comfortLabel.innerText = "Good";
+            comfortLabel.className = "comfort-high";
+        } else if (comfortVal >= 5.0) {
+            comfortLabel.innerText = "Moderate";
+            comfortLabel.className = "comfort-mid";
+        } else {
+            comfortLabel.innerText = "Uncomfortable";
+            comfortLabel.className = "comfort-low";
+        }
+    }
+
     async function fetchCurrent() {
         try {
             const res = await fetch("/api/current");
             if (!res.ok) return;
             const data = await res.json();
-
-            if (!data.temperature) return;
-
-            document.getElementById("val-temp").innerText = data.temperature.toFixed(1);
-            document.getElementById("val-hum").innerText = Math.round(data.humidity);
-            document.getElementById("val-comfort").innerText = data.comfort_score.toFixed(2);
-            document.getElementById("val-room").innerText = `Room: ${data.room}`;
-
-            // alert hot styling
-            const tempCard = document.getElementById("temp-card");
-            if (data.temperature >= 29.0) {
-                tempCard.className = "card hot";
-                document.getElementById("temp-status").innerText = "HOT WARNING! ⚠️";
-            } else {
-                tempCard.className = "card";
-                document.getElementById("temp-status").innerText = "Normal Range";
-            }
-
-            // occupancy badge
-            const occupiedSpan = document.getElementById("val-occupied");
-            if (data.occupied) {
-                occupiedSpan.className = "pulse-occupied";
-                occupiedSpan.innerText = "OCCUPIED";
-            } else {
-                occupiedSpan.className = "pulse-vacant";
-                occupiedSpan.innerText = "VACANT";
-            }
-
-            // comfort badge
-            const comfortLabel = document.getElementById("comfort-label");
-            const comfortVal = data.comfort_score;
-            if (comfortVal >= 9.0) {
-                comfortLabel.innerText = "Optimal";
-                comfortLabel.className = "comfort-high";
-            } else if (comfortVal >= 7.0) {
-                comfortLabel.innerText = "Good";
-                comfortLabel.className = "comfort-high";
-            } else if (comfortVal >= 5.0) {
-                comfortLabel.innerText = "Moderate";
-                comfortLabel.className = "comfort-mid";
-            } else {
-                comfortLabel.innerText = "Uncomfortable";
-                comfortLabel.className = "comfort-low";
-            }
+            updateCurrentMetrics(data);
         } catch (err) {
             console.error("error fetching current telemetry", err);
         }
@@ -480,16 +547,22 @@
                 comfortData.push(item.comfort_score);
             });
 
-            // handle forecasted predictions
-            if (forecast && forecast.predicted_temperature && forecast.model_trained) {
-                const nextTime = new Date();
-                nextTime.setSeconds(nextTime.getSeconds() + 5);
-                labels.push(nextTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " (Pred)");
-                
-                // predict data is pushed to end
-                tempData.push(forecast.predicted_temperature);
-                humData.push(forecast.predicted_humidity);
-                comfortData.push(forecast.predicted_comfort_score);
+            // handle forecasted predictions (Seq2Seq trajectory)
+            if (forecast && forecast.predictions && forecast.model_trained) {
+                forecast.predictions.forEach((pred, index) => {
+                    const nextTime = new Date();
+                    // Each forecast step is 5 seconds ahead
+                    nextTime.setSeconds(nextTime.getSeconds() + (index + 1) * 5);
+                    labels.push(nextTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ` (P${index + 1})`);
+                    
+                    const pTemp = pred[0];
+                    const pHum = pred[1];
+                    const pComfort = calculateComfortScoreLocal(pTemp, pHum);
+                    
+                    tempData.push(pTemp);
+                    humData.push(pHum);
+                    comfortData.push(pComfort);
+                });
             }
 
             // draw or update Chart.js
@@ -526,7 +599,11 @@
                                 backgroundColor: tempGrad,
                                 fill: true,
                                 tension: 0.3,
-                                pointRadius: (context) => context.dataIndex === context.dataset.data.length - 1 && forecast && forecast.model_trained ? 8 : 3,
+                                pointRadius: (context) => {
+                                    const length = context.dataset.data.length;
+                                    const isForecastIndex = context.dataIndex >= length - (forecast && forecast.predictions ? forecast.predictions.length : 0);
+                                    return isForecastIndex ? 6 : 3;
+                                },
                                 pointBackgroundColor: '#ff3131'
                             },
                             {
@@ -536,7 +613,11 @@
                                 backgroundColor: humGrad,
                                 fill: true,
                                 tension: 0.3,
-                                pointRadius: (context) => context.dataIndex === context.dataset.data.length - 1 && forecast && forecast.model_trained ? 8 : 3,
+                                pointRadius: (context) => {
+                                    const length = context.dataset.data.length;
+                                    const isForecastIndex = context.dataIndex >= length - (forecast && forecast.predictions ? forecast.predictions.length : 0);
+                                    return isForecastIndex ? 6 : 3;
+                                },
                                 pointBackgroundColor: '#00f0ff'
                             },
                             {
@@ -546,7 +627,11 @@
                                 backgroundColor: comfortGrad,
                                 fill: true,
                                 tension: 0.3,
-                                pointRadius: (context) => context.dataIndex === context.dataset.data.length - 1 && forecast && forecast.model_trained ? 8 : 3,
+                                pointRadius: (context) => {
+                                    const length = context.dataset.data.length;
+                                    const isForecastIndex = context.dataIndex >= length - (forecast && forecast.predictions ? forecast.predictions.length : 0);
+                                    return isForecastIndex ? 6 : 3;
+                                },
                                 pointBackgroundColor: '#bd00ff'
                             }
                         ]
@@ -603,12 +688,12 @@
         }
     }
 
-    // Polling intervals
-    setInterval(fetchCurrent, 2500);
+    // Polling intervals for chart history and forecasting
     setInterval(fetchHistoryAndDraw, 5000);
 
     // Initial triggers
     fetchCurrent();
+    connectWebSocket();
     fetchHistoryAndDraw();
     addLog("System fully operational. Subscribed to HiveMQ.");
 </script>

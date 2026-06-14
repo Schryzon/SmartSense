@@ -3,13 +3,15 @@ import ssl
 import json
 import sqlite3
 import threading
+import asyncio
 from datetime import datetime
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 import paho.mqtt.client as mqtt
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -40,6 +42,36 @@ recent_buffer = []  # format: [[temp, hum, occupied]]
 last_received_payload = {}
 new_data_counter = 0
 training_lock = threading.Lock()
+
+# WebSocket client connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+        self.loop = None
+
+    def set_loop(self, loop):
+        self.loop = loop
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                self.disconnect(connection)
+
+    def broadcast_from_thread(self, message: dict):
+        if self.loop and self.active_connections:
+            asyncio.run_coroutine_threadsafe(self.broadcast(message), self.loop)
+
+manager = ConnectionManager()
 
 # instantiate PyTorch model pipeline
 forecaster = ForecastingPipeline(window_size=10)
@@ -153,19 +185,83 @@ def on_message(client, userdata, msg):
         if len(recent_buffer) > 100:
             recent_buffer.pop(0)
 
-        # periodically retrain the model on the GPU (every 15 new payloads)
-        new_data_counter += 1
-        if new_data_counter >= 15:
-            new_data_counter = 0
-            print("triggering scheduled PyTorch training on GPU...")
+        # check for anomalies using PyTorch autoencoder reconstruction loss
+        is_anomaly, recon_loss = forecaster.detect_anomaly([temp, hum, occupied])
+
+        # broadcast telemetry, anomaly status, and loss to all dashboard WebSockets
+        broadcast_payload = {
+            "type": "telemetry",
+            "data": {
+                "temperature": temp,
+                "humidity": hum,
+                "occupied": occupied,
+                "comfort_score": comfort,
+                "room": payload.get("room", "Unknown"),
+                "uptime": payload.get("uptime", 0),
+                "is_anomaly": is_anomaly,
+                "reconstruction_loss": recon_loss
+            }
+        }
+        manager.broadcast_from_thread(broadcast_payload)
+
+        # dynamic 3-sigma drift retraining hook
+        drift_detected = False
+        if forecaster.is_trained and forecaster.train_mean is not None and forecaster.train_std is not None:
+            for val, mean, std in zip([temp, hum], forecaster.train_mean, forecaster.train_std):
+                if std > 0.01 and abs(val - mean) / std > 3.0:
+                    drift_detected = True
+                    break
+
+        if drift_detected:
+            print("⚠️ 3-sigma environmental drift detected! triggering immediate CUDA retraining...")
             train_model_async()
+        else:
+            # periodically retrain the model on the GPU (every 15 new payloads)
+            new_data_counter += 1
+            if new_data_counter >= 15:
+                new_data_counter = 0
+                print("triggering scheduled PyTorch training on GPU...")
+                train_model_async()
 
     except Exception as e:
         # let it crash to output logs, Jay values truth over safety
         print(f"error parsing incoming MQTT payload: {e}")
 
-# FastAPI web app setup
-web_app = FastAPI()
+# global telegram bot application instance for lifespan management
+telegram_app = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global telegram_app
+    # bind running event loop to the WebSocket manager
+    manager.set_loop(asyncio.get_running_loop())
+
+    if TELEGRAM_BOT_TOKEN:
+        print("initializing Telegram Bot asynchronously...")
+        telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        telegram_app.add_handler(CommandHandler("start", start_cmd))
+        telegram_app.add_handler(CommandHandler("status", status_cmd))
+        telegram_app.add_handler(CommandHandler("predict", predict_cmd))
+        telegram_app.add_handler(CommandHandler("comfort", comfort_cmd))
+
+        await telegram_app.initialize()
+        await telegram_app.updater.start_polling()
+        await telegram_app.start()
+        print("Telegram Bot listener started... wiggle wiggle! 🐟")
+    else:
+        print("TELEGRAM_BOT_TOKEN not found in environment. Telegram Bot is disabled.")
+
+    yield
+
+    if telegram_app:
+        print("shutting down Telegram Bot...")
+        await telegram_app.updater.stop()
+        await telegram_app.stop()
+        await telegram_app.shutdown()
+        print("Telegram Bot stopped.")
+
+# FastAPI web app setup with lifespan context manager
+web_app = FastAPI(lifespan=lifespan)
 
 @web_app.get("/", response_class=HTMLResponse)
 async def get_dashboard():
@@ -198,13 +294,10 @@ async def get_forecast_api():
     if len(recent_buffer) < 10:
         return {"model_trained": False}
     try:
-        pred_temp, pred_hum = forecaster.predict_next(recent_buffer)
-        pred_comfort = calculate_comfort_score(pred_temp, pred_hum)
+        predictions = forecaster.predict_next(recent_buffer)
         return {
             "model_trained": forecaster.is_trained,
-            "predicted_temperature": pred_temp,
-            "predicted_humidity": pred_hum,
-            "predicted_comfort_score": pred_comfort
+            "predictions": predictions
         }
     except Exception as e:
         return {"model_trained": False, "error": str(e)}
@@ -220,6 +313,16 @@ async def train_model_api():
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@web_app.websocket("/ws/telemetry")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # keep socket connection open/alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 # Telegram Command Handlers
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -258,7 +361,8 @@ async def predict_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        pred_temp, pred_hum = forecaster.predict_next(recent_buffer)
+        predictions = forecaster.predict_next(recent_buffer)
+        pred_temp, pred_hum = predictions[-1]
         pred_comfort = calculate_comfort_score(pred_temp, pred_hum)
 
         warning_suffix = ""
@@ -266,7 +370,8 @@ async def predict_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             warning_suffix = "\n\n⚠️ *Warning*: Uncomfortable conditions predicted soon!"
 
         msg = (
-            f"🔮 *PyTorch GPU Forecast (LSTM)*:\n"
+            f"🔮 *PyTorch GPU Forecast (Seq2Seq LSTM)*:\n"
+            f"• *Steps Forecasted*: {len(predictions)} intervals (25s ahead)\n"
             f"• *Predicted Temp*: {pred_temp:.1f}°C\n"
             f"• *Predicted Humidity*: {pred_hum:.1f}%\n"
             f"• *Predicted Comfort Score*: {pred_comfort:.1f}/10.0"
@@ -285,10 +390,6 @@ async def comfort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• *Below 5.0*: Highly Uncomfortable. Action recommended!"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
-
-def start_web_server():
-    # run uvicorn web server in background thread silently
-    uvicorn.run(web_app, host="0.0.0.0", port=8000, log_level="warning")
 
 def main():
     # 1. Start SQLite DB
@@ -312,25 +413,9 @@ def main():
     # Try training once initially if data exists in DB
     train_model_async()
 
-    # 3. Start FastAPI Web Server in a daemon background thread
+    # 3. Start FastAPI Web Server via Uvicorn on main thread (triggers async lifespan bot)
     print("Launching FastAPI Web Server on http://localhost:8000...")
-    threading.Thread(target=start_web_server, daemon=True).start()
-
-    # 4. Start Telegram Bot polling (runs blocking loop in main thread)
-    if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN not found in environment. Telegram Bot is disabled.")
-        import time
-        while True:
-            time.sleep(1)
-    else:
-        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        app.add_handler(CommandHandler("start", start_cmd))
-        app.add_handler(CommandHandler("status", status_cmd))
-        app.add_handler(CommandHandler("predict", predict_cmd))
-        app.add_handler(CommandHandler("comfort", comfort_cmd))
-
-        print("Telegram Bot listener started... wiggle wiggle! 🐟")
-        app.run_polling()
+    uvicorn.run(web_app, host="0.0.0.0", port=8000, log_level="warning")
 
 if __name__ == "__main__":
     main()
