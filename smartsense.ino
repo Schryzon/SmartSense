@@ -134,6 +134,26 @@ void publish_telemetry_data(TelemetryData data);
 
 void setup() {
     Serial.begin(115200);
+    delay(1000); // Wait for serial to stabilize
+
+    Serial.println("\n--- SmartSense Diagnostics Boot ---");
+
+    // Scan I2C bus
+    Wire.begin();
+    Serial.println("Scanning I2C...");
+    byte error, address;
+    int nDevices = 0;
+    for(address = 1; address < 127; address++) {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0) {
+            Serial.printf("I2C device found at address 0x%02X\n", address);
+            nDevices++;
+        }
+    }
+    if (nDevices == 0) {
+        Serial.println("No I2C devices found!");
+    }
 
     pinMode(
         PIR_PIN,
@@ -161,6 +181,8 @@ void setup() {
     );
 
     dht.begin();
+    Serial.printf("DHT Pin (GPIO %d) state on boot: %d\n", DHT_PIN, digitalRead(DHT_PIN));
+    Serial.println("----------------------------------\n");
 
     if(
         !display.begin(
